@@ -1,6 +1,6 @@
 {
   "name": "dbqueue",
-  "version": "5.0.3",
+  "version": "6.0.0",
   "description": "A minimal, durable DB-based message queue system",
   "homepage": "https://github.com/elliotf/node-dbqueue",
   "main": "main.js",
@@ -21,22 +21,22 @@
     "message bus"
   ],
   "dependencies": {
+    "bluebird": "^3.7.2",
     "mysql2": "^3.9.7",
     "uuid": "^2.0.1"
   },
   "devDependencies": {
-    "async": "^1.5.2",
-    "chai": "^3.5.0",
-    "chai-datetime": "^1.4.1",
-    "dirty-chai": "^1.2.2",
+    "chai": "^4.5.0",
+    "chai-datetime": "^1.8.1",
+    "dirty-chai": "^2.0.1",
     "js-yaml": "^3.6.1",
     "lodash": "^4.6.1",
-    "mocha": "^10.4.0",
+    "mocha": "^11.1.0",
     "mocha-clean": "^1.0.0",
-    "mocha-sinon": "^1.1.5",
+    "mocha-sinon": "^2.1.2",
     "nodemon": "^3.1.0",
-    "sinon": "^1.17.3",
-    "sinon-chai": "^2.8.0"
+    "sinon": "^19.0.2",
+    "sinon-chai": "^3.7.0"
   },
   "author": {
     "name": "Elliot Foster",

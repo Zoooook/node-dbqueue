@@ -1,13 +1,13 @@
 'use strict';
 
-var _       = require('lodash');
-var async   = require('async');
-var yaml    = require('js-yaml');
-var uuid    = require('uuid');
-var helper  = require('./helper.js');
-var expect  = helper.expect;
-var DBQueue = require('../');
-var db      = helper.test_db;
+const _ = require('lodash');
+const yaml = require('js-yaml');
+const uuid = require('uuid');
+const helper = require('./helper.js');
+const expect = helper.expect;
+const DBQueue = require('../');
+const db = helper.test_db;
+const Promise = require('bluebird');
 
 function withoutTimestamps(job_row) {
   return _.omit(job_row, 'create_time', 'update_time', 'id', 'locked_until');
@@ -15,523 +15,291 @@ function withoutTimestamps(job_row) {
 
 describe('DBQueue', function() {
   it('can be instantiated', function() {
-    var queue = new DBQueue({});
+    new DBQueue({});
   });
 
   describe('.connect', function() {
-    it('returns a DBQueue instance', function(done) {
-      DBQueue.connect(helper.test_db_config, function(err, queue) {
-        expect(err).to.not.exist();
+    it('returns a DBQueue instance', async function() {
+      const queue = await DBQueue.connect(helper.test_db_config);
 
-        expect(queue).to.be.an.instanceof(DBQueue);
-
-        return done();
-      });
+      expect(queue).to.be.an.instanceof(DBQueue);
     });
 
     context('when the database port is invalid', function() {
-      it('yields an error rather than throw an exception', function(done) {
-        var config = _.extend({}, helper.test_db_config, {
+      let config;
+
+      beforeEach(async function() {
+        config = _.extend({}, helper.test_db_config, {
           port: 10,
         });
+      });
 
-        DBQueue.connect(config, function(err, queue) {
-          expect(err).to.exist();
+      it('yields an error rather than throw an exception', async function() {
+        let error;
 
-          expect(err.code).to.equal('ECONNREFUSED');
+        try {
+          const queue = await DBQueue.connect(config);
+        } catch(err) {
+          error = err;
+        }
 
-          return done();
-        });
+        expect(error).to.exist();
+
+        expect(error.code).to.equal('ECONNREFUSED');
       });
     });
   });
 
   describe('#insert', function() {
-    var queue;
+    let queue;
 
-    beforeEach(function(done) {
-      DBQueue.connect(helper.test_db_config, function(err, result) {
-        expect(err).to.not.exist();
-
-        queue = result;
-
-        return done();
-      });
+    beforeEach(async function() {
+      queue = await DBQueue.connect(helper.test_db_config);
     });
 
-    it('inserts a message onto the queue', function(done) {
-      queue.insert('waffles', {example:'message data'}, function(err) {
-        expect(err).to.not.exist();
+    it('inserts a message onto the queue', async function() {
+      await queue.insert('waffles', { example:'message data' });
 
-        db.query('SELECT * FROM jobs', function(err, rows) {
-          expect(err).to.not.exist();
+      const [rows] = await db.query('SELECT * FROM jobs');
+      const actual = rows.map(withoutTimestamps);
 
-          var actual = rows.map(withoutTimestamps);
-
-          expect(actual).to.deep.equal([
-            {
-              data:          '{"example":"message data"}',
-              last_error:    null,
-              queue:         'waffles',
-              worker:        'unassigned',
-            }
-          ]);
-
-          return done();
-        });
-      });
+      expect(actual).to.deep.equal([
+        {
+          data: '{"example":"message data"}',
+          last_error: null,
+          queue: 'waffles',
+          worker: 'unassigned',
+        }
+      ]);
     });
 
     context('when called on a newly instantiated object', function() {
-      var queue;
+      let queue;
 
       beforeEach(function() {
         queue = new DBQueue(helper.test_db_config);
       });
 
-      it('lazily connects to the datastore', function(done) {
-        queue.insert('waffles', '{"example":"message data"}', function(err) {
-          expect(err).to.not.exist();
+      it('lazily connects to the datastore', async function() {
+        await queue.insert('waffles', '{"example":"message data"}');
 
-          db.query('SELECT * FROM jobs', function(err, rows) {
-            expect(err).to.not.exist();
-
-            expect(rows).to.have.length(1);
-
-            return done();
-          });
-        });
+        const [rows] = await db.query('SELECT * FROM jobs');
+        expect(rows).to.have.length(1);
       });
     });
 
     context('when the database port is invalid', function() {
-      it('yields an error rather than throw an exception', function(done) {
-        var config = _.extend({}, helper.test_db_config, {
+      let config;
+
+      beforeEach(async function() {
+        config = _.extend({}, helper.test_db_config, {
           port: 10,
         });
+      });
 
+      it('yields an error rather than throw an exception', async function() {
         queue = new DBQueue(config);
 
-        queue.insert('queue name', 'fake message', function(err) {
-          expect(err).to.exist();
+        let error;
 
-          return done();
-        });
+        try {
+          await queue.insert('queue name', 'fake message');
+        } catch(err) {
+          error = err;
+        }
+
+        expect(error).to.exist();
       });
     });
   });
 
   describe('#consume', function() {
-    var queue;
+    let queue;
 
-    beforeEach(function(done) {
-      DBQueue.connect(helper.test_db_config, function(err, result) {
-        expect(err).to.not.exist();
-
-        queue = result;
-
-        return done();
-      });
+    beforeEach(async function() {
+      queue = await DBQueue.connect(helper.test_db_config);
     });
 
     context('when there are jobs', function() {
-      beforeEach(function(done) {
-        var todo = [];
-
-        todo.push(function(done) {
-          queue.insert('queue_a', 'fake data for a', function(err) {
-            expect(err).to.not.exist();
-
-            return done();
-          });
-        });
-
-        todo.push(function(done) {
-          queue.insert('queue_b', 'fake data for b', function(err) {
-            expect(err).to.not.exist();
-
-            return done();
-          });
-        });
-
-        async.parallel(todo, function(err) {
-          expect(err).to.not.exist();
-
-          return done();
-        });
+      beforeEach(async function() {
+        await Promise.all([
+          queue.insert('queue_a', 'fake data for a'),
+          queue.insert('queue_b', 'fake data for b'),
+        ]);
       });
 
-      it('returns a job from the queue', function(done) {
-        var fake_uuid = 'fakeuuid-0000-1111-2222-333333333333';
-        this.sinon.stub(uuid, 'v4').returns(fake_uuid)
+      it('returns a job from the queue', async function() {
+        const fake_uuid = 'fakeuuid-0000-1111-2222-333333333333';
+        this.sinon.stub(uuid, 'v4').returns(fake_uuid);
 
-        queue.consume('queue_a', function(err, job) {
-          expect(err).to.not.exist();
-          expect(job).to.deep.equal('fake data for a');
-
-          return done();
-        });
+        const messages = await queue.consume('queue_a');
+        expect(messages[0].data).to.equal('fake data for a');
       });
 
-      it('gives a job out no more than once', function(done) {
-        queue.consume('queue_a', function(err, job) {
-          expect(err).to.not.exist();
+      it('gives a job out no more than once', async function() {
+        let messages = await queue.consume('queue_a');
+        expect(messages.length).to.equal(1);
 
-          expect(job).to.exist();
-
-          queue.consume('queue_a', function(err, job) {
-            expect(err).to.not.exist();
-
-            expect(job).to.be.undefined();
-
-            return done();
-          });
-        });
+        messages = await queue.consume('queue_a');
+        expect(messages.length).to.equal(0);
       });
 
-      it('leaves the job on the queue with an updated lock time', function(done) {
-        queue.consume('queue_a', function(err, job) {
-          expect(err).to.not.exist();
+      it('leaves the job on the queue with an updated lock time', async function() {
+        await queue.consume('queue_a');
 
-          db.query("SELECT * FROM jobs WHERE queue='queue_a'", [], function(err, rows) {
-            expect(err).to.not.exist();
+        const [rows] = await db.query('SELECT * FROM jobs WHERE queue = ?', ['queue_a']);
 
-            expect(rows).to.have.length(1);
-            expect(rows[0].locked_until).to.be.afterTime(new Date());
-
-            return done();
-          });
-        });
+        expect(rows).to.have.length(1);
+        expect(rows[0].locked_until).to.be.afterTime(new Date());
       });
 
       context('and more than one queue is specified', function() {
-        it('returns jobs from any of the specified queues', function(done) {
-          queue.consume(['queue_a','queue_b'], function(err, job) {
-            expect(err).to.not.exist();
+        it('returns jobs from any of the specified queues', async function() {
+          let messages = await queue.consume(['queue_a','queue_b']);
+          expect(messages.length).to.equal(1);
 
-            expect(job).to.exist();
+          messages = await queue.consume(['queue_a','queue_b']);
+          expect(messages.length).to.equal(1);
 
-            queue.consume(['queue_a','queue_b'], function(err, job) {
-              expect(err).to.not.exist();
+          messages = await queue.consume(['queue_a','queue_b']);
+          expect(messages.length).to.equal(0);
+        });
+      });
 
-              expect(job).to.exist();
+      context('and the message is acked', function() {
+        it('removes the job from the queue', async function() {
+          const messages = await queue.consume('queue_a');
+          await messages[0].ack();
 
-              queue.consume(['queue_a','queue_b'], function(err, job) {
-                expect(err).to.not.exist();
-                expect(job).to.not.exist();
+          const [rows] = await db.query('SELECT * FROM jobs WHERE queue = ?', ['queue_a']);
+          expect(rows).to.have.length(0);
+        });
 
-                return done();
-              });
-            });
+        context('more than once', function() {
+          it('removes the job from the queue without error', async function() {
+            const messages = await queue.consume('queue_a');
+            await messages[0].ack();
+            await messages[0].ack();
+
+            const [rows] = await db.query('SELECT * FROM jobs WHERE queue = ?', ['queue_a']);
+            expect(rows).to.deep.equal([]);
           });
         });
       });
 
-      context('and the job completion callback is called', function() {
-        it('removes the job from the queue', function(done) {
-          queue.consume('queue_a', function(err, job, finished) {
-            expect(err).to.not.exist();
+      context('and the message is nacked', function() {
+        it('leaves the job on the queue', async function() {
+          const messages = await queue.consume('queue_a');
+          await messages[0].nack(new Error('fake error'));
 
-            expect(finished).to.be.a('function');
-
-            finished(null);
-
-            setTimeout(function() {
-              db.query("SELECT * FROM jobs WHERE queue='queue_a'", [], function(err, rows) {
-                expect(err).to.not.exist();
-
-                expect(rows).to.have.length(0);
-
-                return done();
-              });
-            }, 10);
-          });
+          const [rows] = await db.query('SELECT * FROM jobs WHERE queue = ?', ['queue_a']);
+          expect(rows).to.have.length(1);
         });
 
-        context('more than once', function() {
-          it('removes the job from the queue without error', function(done) {
-            queue.consume('queue_a', function(err, job, finished) {
-              expect(err).to.not.exist();
-
-              expect(finished).to.be.a('function');
-
-              finished();
-
-              finished();
-
-              setTimeout(function(err) {
-                expect(err).to.not.exist();
-
-                db.query("SELECT * FROM jobs WHERE queue='queue_a'", [], function(err, rows) {
-                  expect(err).to.not.exist();
-
-                  expect(rows).to.deep.equal([]);
-
-                  return done();
-                });
-              }, 10);
+        context('when the persist_last_error option has been specified', function() {
+          beforeEach(async function() {
+            const custom_config = _.extend({}, helper.test_db_config, {
+              persist_last_error: true,
             });
-          });
-        });
 
-        context('with an error', function() {
-          it('leaves the job on the queue', function(done) {
-            queue.consume('queue_a', function(err, job, finishedWithJob) {
-              expect(err).to.not.exist();
-
-              finishedWithJob(new Error('fake error'));
-              setTimeout(function(err) {
-                expect(err).to.not.exist();
-
-                db.query('SELECT * FROM jobs WHERE queue = ?', ['queue_a'], function(err, rows) {
-                  expect(err).to.not.exist();
-
-                  expect(rows).to.have.length(1);
-
-                  return done();
-                });
-              },10);
-            });
+            queue = await DBQueue.connect(custom_config);
           });
 
-          context('when the persist_last_error option has been specified', function() {
-            beforeEach(function(done) {
-              var custom_config = _.extend({}, helper.test_db_config, {
-                persist_last_error: true,
-              });
+          it('should store that error in the `last_error` column', async function() {
+            const messages = await queue.consume('queue_a');
+            await messages[0].nack(new Error('fake error'));
 
-              DBQueue.connect(custom_config, function(err, result) {
-                expect(err).to.not.exist();
-
-                queue = result;
-
-                return done();
-              });
-            });
-
-            it('should store that error in the `last_error` column', function(done) {
-              queue.consume('queue_a', function(err, job, finishedWithJob) {
-                expect(err).to.not.exist();
-
-                finishedWithJob(new Error('fake error'));
-                setTimeout(function(err) {
-                  expect(err).to.not.exist();
-
-                  db.query('SELECT last_error FROM jobs WHERE queue = ?', ['queue_a'], function(err, rows) {
-                    expect(err).to.not.exist();
-
-                    expect(rows).to.deep.equal([
-                      {
-                        last_error: 'Error: fake error',
-                      },
-                    ]);
-
-                    return done();
-                  });
-                },10);
-              });
-            });
-          });
-        });
-
-        context('without a callback', function() {
-          it('removes the job from the queue without error', function(done) {
-            queue.consume('queue_a', function(err, job, finished) {
-              expect(err).to.not.exist();
-
-              expect(finished).to.be.a('function');
-
-              finished();
-
-              setTimeout(function() {
-                db.query("SELECT * FROM jobs WHERE queue='queue_a'", [], function(err, rows) {
-                  expect(err).to.not.exist();
-
-                  expect(rows).to.have.length(0);
-
-                  return done();
-                });
-              }, 10);
-            });
+            const [rows] = await db.query('SELECT last_error FROM jobs WHERE queue = ?', ['queue_a']);
+            expect(rows).to.deep.equal([{ last_error: 'Error: fake error' }]);
           });
         });
       });
     });
 
     context('when there is more than one job', function() {
-      beforeEach(function(done) {
-        queue.insert('queue_a', 'first', function(err) {
-          expect(err).to.not.exist();
-
-          queue.insert('queue_a', 'second', function(err) {
-            expect(err).to.not.exist();
-
-            return done();
-          });
-        });
+      beforeEach(async function() {
+        await queue.insert('queue_a', 'first');
+        await queue.insert('queue_a', 'second');
       });
 
-      it('returns all of them one at a time', function(done) {
-        queue.consume('queue_a', function(err, first) {
-          expect(err).to.not.exist();
+      it('returns all of them one at a time', async function() {
+        let [first] = await queue.consume('queue_a');
+        expect(first).to.exist();
 
-          expect(first).to.exist();
+        let [second] = await queue.consume('queue_a');
+        expect(second).to.exist();
+        expect(second.data).to.not.equal(first.data);
 
-          queue.consume('queue_a', function(err, second) {
-            expect(err).to.not.exist();
-
-            expect(second).to.exist();
-
-            expect(second).to.not.deep.equal(first);
-
-            queue.consume('queue_a', function(err, last) {
-              expect(err).to.not.exist();
-
-              expect(last).to.not.exist();
-
-              return done();
-            });
-          });
-        });
+        let messages = await queue.consume('queue_a');
+        expect(messages.length).to.equal(0);
       });
     });
 
     context('when the desired queue is empty', function() {
-      it('returns nothing', function(done) {
-        queue.consume('queue_a', function(err, job) {
-          expect(err).to.not.exist();
-
-          expect(job).to.not.exist();
-
-          return done();
-        });
+      it('returns nothing', async function() {
+        const messages = await queue.consume('queue_a');
+        expect(messages.length).to.equal(0);
       });
     });
 
     context('when the desired queue does not exist', function() {
-      it('returns nothing', function(done) {
-        queue.consume('queue_c', function(err, job) {
-          expect(err).to.not.exist();
-          expect(job).to.not.exist();
-
-          return done();
-        });
-      });
-    });
-
-    context('when all of the jobs are locked', function() {
-      it('returns nothing', function(done) {
-        queue.insert('queue_a', 'some data', function(err) {
-          expect(err).to.not.exist();
-
-          queue.consume('queue_a', function(err, job) {
-            expect(err).to.not.exist();
-
-            queue.consume('queue_a', function(err, job) {
-              expect(err).to.not.exist();
-
-              expect(job).to.not.exist();
-
-              return done();
-            });
-          });
-        });
+      it('returns nothing', async function() {
+        const messages = await queue.consume('queue_c');
+        expect(messages.length).to.equal(0);
       });
     });
 
     context('when provided an options object', function() {
-      var options;
+      let options;
 
-      beforeEach(function(done) {
-        options = {
-        };
+      beforeEach(async function() {
+        options = {};
 
-        queue.insert('a queue', 'message 1', function(err) {
-          expect(err).to.not.exist();
-
-          return done();
-        });
+        await queue.insert('a queue', 'message 1');
       });
 
       context('that has a lock time', function() {
         beforeEach(function() {
-          var hour_in_seconds = 60 * 60;
+          const hour_in_seconds = 60 * 60;
           options.lock_time = hour_in_seconds;
         });
 
-        it('locks the jobs for that long', function(done) {
-          queue.consume('a queue', options, function(err, job) {
-            expect(err).to.not.exist();
+        it('locks the jobs for that long', async function() {
+          const messages = await queue.consume('a queue', options);
 
-            db.query("SELECT locked_until FROM jobs", function(err, rows) {
-              expect(err).to.not.exist();
+          const [rows] = await db.query("SELECT locked_until FROM jobs");
+          expect(rows).to.have.length(1);
 
-              expect(rows).to.have.length(1);
-
-              var minute   = 60*1000;
-              var expected = new Date(Date.now() + (45 * minute));
-              expect(rows[0].locked_until).to.be.afterTime(expected);
-
-              return done();
-            });
-          });
+          const minute = 60*1000;
+          const expected = new Date(Date.now() + (45 * minute));
+          expect(rows[0].locked_until).to.be.afterTime(expected);
         });
       });
 
       context('that has a count', function() {
-        beforeEach(function(done) {
+        beforeEach(async function() {
           options.count = 2;
 
-          queue.insert('a queue', 'message 2', function(err) {
-            expect(err).to.not.exist();
-
-            queue.insert('a queue', 'message 3', function(err) {
-              expect(err).to.not.exist();
-
-              return done();
-            });
-          });
+          await queue.insert('a queue', 'message 2');
+          await queue.insert('a queue', 'message 3');
         });
 
-        it('calls the job handler that many times', function(done) {
-          var consumer = this.sinon.spy();
+        it('returns that many messages', async function() {
+          const messages = await queue.consume('a queue', options);
+          expect(messages.length).to.equal(2);
 
-          queue.consume('a queue', options, consumer);
-
-          setTimeout(function() {
-            expect(consumer).to.have.been.calledTwice();
-
-            // called without err
-            expect(consumer.args[0][0]).to.not.exist();
-            expect(consumer.args[1][0]).to.not.exist();
-
-            db.query("SELECT locked_until FROM jobs WHERE locked_until > NOW()", function(err, rows) {
-              expect(err).to.not.exist();
-
-              expect(rows).to.have.length(2);
-
-              return done();
-            });
-          }, 10);
+          const [rows] = await db.query("SELECT locked_until FROM jobs WHERE locked_until > NOW()");
+          expect(rows).to.have.length(2);
         });
 
         context('that is greater than the number of messages', function() {
-          it('returns all available messages', function(done) {
-            options.count = 100;
-            var consumer = this.sinon.spy();
+          beforeEach(async function() {
+            options.count = 3;
+          });
 
-            queue.consume('a queue', options, consumer);
-
-            setTimeout(function() {
-              expect(consumer).to.have.been.calledThrice();
-
-              // called without err
-              expect(consumer.args[0][0]).to.not.exist();
-              expect(consumer.args[1][0]).to.not.exist();
-              expect(consumer.args[2][0]).to.not.exist();
-
-              return done();
-            }, 10);
+          it('returns all available messages', async function() {
+            const messages = await queue.consume('a queue', options);
+            expect(messages.length).to.equal(3);
           });
         });
       });
@@ -539,311 +307,284 @@ describe('DBQueue', function() {
   });
 
   describe('#listen', function() {
-    var queue;
-    var listen_options;
-    var consumer;
+    let queue;
+    let listen_options;
+    let consumer;
 
-    beforeEach(function(done) {
+    beforeEach(async function() {
       queue = new DBQueue(helper.test_db_config);
 
       listen_options  = {
-        interval:        1000,
-        lock_time:       5,
+        interval: 1000,
+        lock_time: 5,
       };
 
       consumer = this.sinon.spy();
 
-      var todo = ['a', 'b', 'c', 'd', 'e'];
-      async.map(
-        todo,
-        function(message, done) {
-          return queue.insert('a queue', message, done);
-        },
-        function(err) {
-          expect(err).to.not.exist();
-
-          return done();
-        }
-      );
+      await Promise.map(['a', 'b', 'c', 'd', 'e'], (message) => {
+        return queue.insert('a queue', message);
+      });
     });
 
-    it('consumes messages on an interval', function(done) {
+    it('consumes messages on an interval', async function() {
       this.sinon.stub(queue, 'consume');
 
-      var clock    = this.sinon.useFakeTimers();
+      const clock = this.sinon.useFakeTimers();
 
       queue.listen('a queue', listen_options, consumer);
       expect(queue.consume).not.to.have.been.called();
-      clock.tick(5);
+      await clock.tickAsync(5);
       expect(queue.consume).not.to.have.been.called();
-      clock.tick(1000);
+      await clock.tickAsync(1000);
 
       expect(queue.consume).to.have.been.calledOnce();
-      clock.tick(500);
+      await clock.tickAsync(500);
       expect(queue.consume).to.have.been.calledOnce();
-      clock.tick(1000);
+      await clock.tickAsync(1000);
       expect(queue.consume).to.have.been.calledTwice();
-
-      return done();
     });
 
-    it('can stop listening', function(done) {
+    it('can stop listening', async function() {
       this.sinon.stub(queue, 'consume');
 
-      var clock    = this.sinon.useFakeTimers();
+      const clock = this.sinon.useFakeTimers();
 
-      var stop = queue.listen('a queue', listen_options, consumer);
-      clock.tick(1500);
+      const stop = queue.listen('a queue', listen_options, consumer);
+      console.log('stop', stop);
+      await clock.tickAsync(1500);
       expect(queue.consume).to.have.been.calledOnce();
-      clock.tick(1000);
+      await clock.tickAsync(1000);
       expect(queue.consume).to.have.been.calledTwice();
       stop();
-      clock.tick(2000);
+      await clock.tickAsync(2000);
       expect(queue.consume).to.have.been.calledTwice();
-
-      return done();
     });
 
-    it('passes arguments through to DBQueue#consume', function(done) {
+    it('passes arguments through to DBQueue#consume', async function() {
       this.sinon.stub(queue, 'consume');
 
-      var clock    = this.sinon.useFakeTimers();
+      const clock = this.sinon.useFakeTimers();
 
-      var stop = queue.listen('a queue', listen_options, consumer);
-      clock.tick(1500);
+      queue.listen('a queue', listen_options, consumer);
+      await clock.tickAsync(1500);
       expect(queue.consume).to.have.been.calledOnce();
 
-      var expected_options = {
+      const expected_options = {
         lock_time: 5,
-        count:     1,
+        count: 1,
       };
 
       expect(queue.consume).to.have.been.calledWith('a queue', expected_options);
-
-      return done();
     });
 
-    it('the number of messages being processed never exceeds `max_outstanding`', function(done) {
-      var clock         = this.sinon.useFakeTimers();
+    it('the number of messages being processed never exceeds `max_outstanding`', async function() {
+      const clock = this.sinon.useFakeTimers();
 
-      var num_processed = 0;
-      function consumer(err, message, ackMessage) {
-        setTimeout(ackMessage, 2000 * ++num_processed);
+      let num_processed = 0;
+      function consumer(message, ack, nack) {
+        setTimeout(ack, 2000 * ++num_processed);
       }
 
-      var fakeAckMessage = this.sinon.spy();
-      var num_messages   = 0;
-      var max_messages   = 5;
-      this.sinon.stub(queue, 'consume', function(queue_name, consume_options, done) {
+      const fakeAck = this.sinon.spy();
+      let num_messages = 0;
+      const max_messages = 5;
+      this.sinon.stub(queue, 'consume').callsFake(async function(queue_name, consume_options) {
         if (num_messages++ >= max_messages) {
-          return;
+          return Promise.resolve([]);
         }
-        return done(null, 'fake message', fakeAckMessage);
+        return Promise.resolve([{
+          data: 'fake message',
+          ack: fakeAck,
+        }]);
       });
 
-      var interval      = 1000;
-      var past_interval = interval + 10;
-      listen_options    = {
+      listen_options = {
         max_outstanding: 2,
-        lock_time:       3000,
-        interval:        interval,
+        lock_time: 3000,
+        interval: 1000,
       };
       queue.listen('a queue', listen_options, consumer);
 
-      clock.tick(past_interval);
-      expect(queue.consume).to.have.been.calledOnce();
-      expect(queue.consume).to.have.been.calledWith('a queue', { count: 2, lock_time: 3000, });
-      queue.consume.reset();
+      await clock.tickAsync(1000);
+      expect(queue.consume.args).to.deep.equal([['a queue', { count: 2, lock_time: 3000 }]]); // called at 1 second
+      queue.consume.resetHistory();
 
-      clock.tick(100);
-
+      await clock.tickAsync(100);
       expect(queue.consume).not.to.have.been.called();
 
-      clock.tick(past_interval);
+      await clock.tickAsync(1000);
+      expect(queue.consume.args).to.deep.equal([['a queue', { count: 1, lock_time: 3000 }]]); // called at 2 seconds
+      queue.consume.resetHistory();
 
-      expect(queue.consume).to.have.been.calledOnce();
-      expect(queue.consume).to.have.been.calledWith('a queue', { count: 1, lock_time: 3000, });
-      queue.consume.reset();
-
-      clock.tick(past_interval);
-
-      expect(fakeAckMessage).to.have.callCount(1);
-
+      await clock.tickAsync(1000);
+      expect(fakeAck).to.have.callCount(1); // called at 1 + 2 = 3 seconds
       expect(queue.consume).not.to.have.been.called();
 
-      clock.tick(3000);
-      expect(fakeAckMessage).to.have.callCount(2);
+      await clock.tickAsync(1000);
+      expect(queue.consume.args).to.deep.equal([['a queue', { count: 1, lock_time: 3000 }]]); // called at 4 seconds
+      queue.consume.resetHistory();
 
-      clock.tick(4000);
-      expect(fakeAckMessage).to.have.callCount(3);
+      await clock.tickAsync(2000);
+      expect(fakeAck).to.have.callCount(2); // called at 2 + 4 = 6 seconds
+      expect(queue.consume).not.to.have.been.called();
 
-      clock.tick(30000);
-      expect(fakeAckMessage).to.have.callCount(5);
+      await clock.tickAsync(1000);
+      expect(queue.consume.args).to.deep.equal([['a queue', { count: 1, lock_time: 3000 }]]); // called at 7 seconds
+      queue.consume.resetHistory();
 
-      return done();
+      await clock.tickAsync(3000);
+      expect(fakeAck).to.have.callCount(3); // called at 4 + 6 = 10 seconds
+      expect(queue.consume).not.to.have.been.called();
+
+      await clock.tickAsync(1000);
+      expect(queue.consume.args).to.deep.equal([['a queue', { count: 1, lock_time: 3000 }]]); // called at 11 seconds
+      queue.consume.resetHistory();
+
+      await clock.tickAsync(4000);
+      expect(fakeAck).to.have.callCount(4); // called at 7 + 8 = 15 seconds
+      expect(queue.consume).not.to.have.been.called();
+
+      await clock.tickAsync(1000);
+      expect(queue.consume.args).to.deep.equal([['a queue', { count: 1, lock_time: 3000 }]]); // called at 16 seconds
+      queue.consume.resetHistory();
+
+      await clock.tickAsync(5000);
+      expect(fakeAck).to.have.callCount(5); // called at 11 + 10 = 21 seconds
+      expect(queue.consume.args).to.deep.equal([
+        ['a queue', { count: 1, lock_time: 3000 }],
+        ['a queue', { count: 1, lock_time: 3000 }],
+        ['a queue', { count: 1, lock_time: 3000 }],
+        ['a queue', { count: 1, lock_time: 3000 }],
+        ['a queue', { count: 1, lock_time: 3000 }],
+      ]); // called every second but no more messages to consume
+      queue.consume.resetHistory();
+
+      await clock.tickAsync(3000);
+      expect(queue.consume.args).to.deep.equal([
+        ['a queue', { count: 2, lock_time: 3000 }],
+        ['a queue', { count: 2, lock_time: 3000 }],
+        ['a queue', { count: 2, lock_time: 3000 }],
+      ]); // called every second with count: 2
     });
 
     context('when provided a max_jobs_per_interval', function() {
-      var listen_options;
-      var interval;
+      let listen_options;
+      let interval;
 
       beforeEach(function() {
         interval = 500;
 
         listen_options = {
-          max_outstanding:        4,
-          max_jobs_per_interval:  3,
-          lock_time:              60000,
-          interval:               interval,
+          max_outstanding: 4,
+          max_jobs_per_interval: 3,
+          lock_time: 60000,
+          interval: interval,
         };
       });
 
-      it('will fetch only up to that many jobs at a time', function(done) {
+      it('will fetch only up to that many jobs at a time', async function() {
         this.sinon.stub(queue, 'consume');
 
-        var consumer = this.sinon.spy();
+        const consumer = this.sinon.spy();
 
-        var clock = this.sinon.useFakeTimers();
+        const clock = this.sinon.useFakeTimers();
 
         queue.listen('a queue', listen_options, consumer);
 
         expect(queue.consume).to.have.callCount(0);
 
-        clock.tick(interval + 10);
+        await clock.tickAsync(interval + 10);
 
         expect(queue.consume).to.have.callCount(1);
         expect(queue.consume.args[0][1]).to.deep.equal({
-          count:     3,
+          count: 3,
           lock_time: 60000,
         });
-
-        done();
       });
     });
 
     context('when options.interval is provided', function() {
-      it('checks for new messages every <interval> milliseconds', function(done) {
-        var clock    = this.sinon.useFakeTimers();
-        var consumer = this.sinon.spy();
-        var interval = 100;
+      it('checks for new messages every <interval> milliseconds', async function() {
+        const clock = this.sinon.useFakeTimers();
+        const consumer = this.sinon.spy();
+        const interval = 100;
 
         this.sinon.spy(queue, 'consume');
 
-        listen_options    = {
+        listen_options = {
           max_outstanding: 100,
-          lock_time:       3000,
-          interval:        interval,
+          lock_time: 3000,
+          interval: interval,
         };
 
         queue.listen('a queue', listen_options, consumer);
 
         expect(queue.consume).to.have.callCount(0);
 
-        clock.tick(12*interval + 10);
+        await clock.tickAsync(12*interval + 10);
 
         expect(queue.consume).to.have.callCount(12);
-
-        return done();
       });
     });
 
     context('when there are no messages', function() {
-      it('does not call the consumer', function(done) {
-        var clock    = this.sinon.useFakeTimers();
-        var consumer = this.sinon.spy();
+      it('does not call the consumer', async function() {
+        const clock = this.sinon.useFakeTimers();
+        const consumer = this.sinon.spy();
 
-        this.sinon.stub(queue, 'consume', function(queue_name, consume_options, done) {
-          return done();
+        this.sinon.stub(queue, 'consume').callsFake(async function(queue_name, consume_options) {
+          return [];
         });
 
-        listen_options    = {
+        listen_options = {
           max_outstanding: 2,
-          lock_time:       3000,
-          interval:        100,
+          lock_time: 3000,
+          interval: 100,
         };
 
         queue.listen('an empty queue', listen_options, consumer);
 
-        clock.tick(30000);
+        await clock.tickAsync(30000);
 
         expect(consumer).to.have.callCount(0);
-
-        return done();
       });
     });
   });
 
   describe('#size', function() {
-    var queue;
+    let queue;
 
-    beforeEach(function(done) {
-      DBQueue.connect(helper.test_db_config, function(err, result) {
-        expect(err).to.not.exist();
-
-        queue = result;
-
-        return done();
-      });
+    beforeEach(async function() {
+      queue = await DBQueue.connect(helper.test_db_config);
     });
 
     context('when there aren\'t any jobs', function() {
-      it('returns 0', function(done) {
-        queue.size('queue_a', function(err, count) {
-          expect(err).to.not.exist();
+      it('returns 0', async function() {
+        const count = await queue.size('queue_a');
 
-          expect(count).to.equal(0);
-
-          return done();
-        });
+        expect(count).to.equal(0);
       });
     });
 
     context('when there are jobs', function() {
-      beforeEach(function(done) {
-        var todo = [];
-
-        todo.push(function(done) {
-          queue.insert('queue_a', 'fake data for a', function(err) {
-            expect(err).to.not.exist();
-
-            return done();
-          });
-        });
-
-        todo.push(function(done) {
-          queue.insert('queue_b', 'fake data for b', function(err) {
-            expect(err).to.not.exist();
-
-            return done();
-          });
-        });
-
-        async.parallel(todo, function(err) {
-          expect(err).to.not.exist();
-
-          return done();
-        });
+      beforeEach(async function() {
+        await Promise.all([
+          queue.insert('queue_a', 'fake data for a'),
+          queue.insert('queue_b', 'fake data for b'),
+        ]);
       });
 
-      it('returns the number of jobs in the queue', function(done) {
-        queue.size('queue_a', function(err, count) {
-          expect(err).to.not.exist();
+      it('returns the number of jobs in the queue', async function() {
+        const count = await queue.size('queue_a');
 
-          expect(count).to.equal(1);
-
-          return done();
-        });
+        expect(count).to.equal(1);
       });
 
       context('when multiple queues are requested', function() {
-        it('returns the total number of jobs across the queues', function(done) {
-          queue.size(['queue_a', 'queue_b'], function(err, count) {
-            expect(err).to.not.exist();
+        it('returns the total number of jobs across the queues', async function() {
+          const count = await queue.size(['queue_a', 'queue_b']);
 
-            expect(count).to.equal(2);
-
-            return done();
-          });
+          expect(count).to.equal(2);
         });
       });
     });
@@ -851,176 +592,112 @@ describe('DBQueue', function() {
 
   describe('integration tests', function() {
     describe('custom table name support', function() {
-      var queue;
+      let queue;
 
-      beforeEach(function(done) {
-        var custom_config = _.extend({}, helper.test_db_config, {
+      beforeEach(async function() {
+        const custom_config = _.extend({}, helper.test_db_config, {
           table_name: 'custom_jobs_table',
         });
-        DBQueue.connect(custom_config, function(err, result) {
-          expect(err).to.not.exist();
 
-          queue = result;
-
-          return done();
-        });
+        queue = await DBQueue.connect(custom_config);
       });
 
       context('when provided a custom table name', function() {
-        it('uses the provided table name', function(done) {
-          queue.insert('custom_table_queue', 'fake data for custom table queue', function(err) {
-            expect(err).to.not.exist();
+        it('uses the provided table name', async function() {
+          await queue.insert('custom_table_queue', 'fake data for custom table queue');
+          const size = await queue.size('custom_table_queue');
+          expect(size).to.equal(1);
 
-            queue.size('custom_table_queue', function(err, size) {
-              expect(err).to.not.exist();
+          let [rows] = await db.query('SELECT * FROM jobs');
+          expect(rows).to.deep.equal([]);
 
-              expect(size).to.equal(1);
+          [rows] = await db.query('SELECT * FROM custom_jobs_table');
+          expect(rows).to.have.length(1);
 
-              db.query('SELECT * FROM jobs', function(err, rows) {
-                expect(err).to.not.exist();
+          const messages = await queue.consume('custom_table_queue');
+          expect(messages.length).to.equal(1);
+          expect(messages[0].data).to.equal('fake data for custom table queue');
 
-                expect(rows).to.deep.equal([]);
-
-                db.query('SELECT * FROM custom_jobs_table', function(err, rows) {
-                  expect(err).to.not.exist();
-
-                  expect(rows).to.have.length(1);
-
-                  queue.consume('custom_table_queue', function(err, job, completionCallback) {
-                    expect(err).to.not.exist();
-
-                    expect(job).to.exist();
-                    expect(job).to.equal('fake data for custom table queue');
-
-                    completionCallback(null);
-                    setTimeout(function () {
-                      db.query('SELECT * FROM custom_jobs_table', function(err, rows) {
-                        expect(err).to.not.exist();
-                        expect(rows).to.have.length(0);
-                        return done();
-                      });
-                    }, 10);
-
-                  });
-                });
-              });
-            });
-          });
+          await messages[0].ack();
+          [rows] = await db.query('SELECT * FROM custom_jobs_table');
+          expect(rows).to.have.length(0);
         });
       });
     });
 
     describe('serialization support', function() {
       context('when provided serializer/deserializer functions', function() {
-        it('uses those functions to serialize/deserialize job data', function(done) {
-          var options = _.extend({}, helper.test_db_config, {
-            serializer:   yaml.dump,
+        it('uses those functions to serialize/deserialize job data', async function() {
+          const options = _.extend({}, helper.test_db_config, {
+            serializer: yaml.dump,
             deserializer: yaml.load,
           });
 
-          var queue = new DBQueue(options);
+          const queue = new DBQueue(options);
 
-          queue.insert('a queue', { fake: 'job data' }, function(err) {
-            expect(err).to.not.exist();
+          await queue.insert('a queue', { fake: 'job data' });
+          const [rows] = await db.query('SELECT data FROM jobs');
+          expect(rows).to.deep.equal([{ data: 'fake: job data\n' }]);
 
-            db.query('SELECT data FROM jobs', function(err, rows) {
-              expect(err).to.not.exist();
-
-              expect(rows).to.deep.equal([
-                {
-                  data: 'fake: job data\n'
-                },
-              ]);
-
-              queue.consume('a queue', function(err, data, ackCallback) {
-                expect(err).to.not.exist();
-
-                expect(data).to.deep.equal({
-                  fake: 'job data',
-                });
-
-                return done();
-              });
-            });
-          });
+          const messages = await queue.consume('a queue');
+          expect(messages[0].data).to.deep.equal({ fake: 'job data' });
         });
       });
 
       context('when not provided a serializer/deserializer', function() {
-        it('defaults to JSON.stringify/JSON.parse', function(done) {
-          var queue = new DBQueue(helper.test_db_config);
+        it('defaults to JSON.stringify/JSON.parse', async function() {
+          const queue = new DBQueue(helper.test_db_config);
 
-          queue.insert('a queue', { fake: 'job data' }, function(err) {
-            expect(err).to.not.exist();
+          await queue.insert('a queue', { fake: 'job data' });
+          const [rows] = await db.query('SELECT data FROM jobs');
+          expect(rows).to.deep.equal([{ data: '{"fake":"job data"}' }]);
 
-            db.query('SELECT data FROM jobs', function(err, rows) {
-              expect(err).to.not.exist();
-
-              expect(rows).to.deep.equal([
-                {
-                  data: '{"fake":"job data"}'
-                },
-              ]);
-
-              queue.consume('a queue', function(err, data, ackCallback) {
-                expect(err).to.not.exist();
-
-                expect(data).to.deep.equal({ fake: 'job data' });
-
-                return done();
-              });
-            });
-          });
+          const messages = await queue.consume('a queue');
+          expect(messages[0].data).to.deep.equal({ fake: 'job data' });
         });
       });
 
       context('when serialization fails', function() {
-        it('yields an error', function(done) {
-          var options = _.extend({}, helper.test_db_config, {
+        it('yields an error', async function() {
+          const options = _.extend({}, helper.test_db_config, {
             serializer: function(data) {
               return data.someInvalidMethod();
             },
           });
 
-          var queue = new DBQueue(options);
+          const queue = new DBQueue(options);
 
-          queue.insert('a queue', { fake: 'job data' }, function(err) {
-            expect(err).to.exist();
-
-            return done();
-          });
+          let err;
+          try {
+            await queue.insert('a queue', { fake: 'job data' });
+          } catch(error) {
+            err = error;
+          }
+          expect(err).to.exist();
         });
       });
 
       context('when deserialization fails', function() {
-        it('yields an error', function(done) {
-          var options = _.extend({}, helper.test_db_config, {
+        it('yields an error', async function() {
+          const options = _.extend({}, helper.test_db_config, {
             serializer: function(data) {
               return data;
             },
           });
 
-          var queue = new DBQueue(options);
+          const queue = new DBQueue(options);
 
-          queue.insert('a queue', 'an invalid json string', function(err) {
-            expect(err).to.not.exist();
+          await queue.insert('a queue', 'an invalid json string');
+          const [rows] = await db.query('SELECT data FROM jobs');
+          expect(rows).to.deep.equal([{ data: 'an invalid json string' }]);
 
-            db.query('SELECT data FROM jobs', function(err, rows) {
-              expect(err).to.not.exist();
-
-              expect(rows).to.deep.equal([
-                {
-                  data: 'an invalid json string'
-                },
-              ]);
-
-              queue.consume('a queue', function(err, data, ackCallback) {
-                expect(err).to.exist();
-
-                return done();
-              });
-            });
-          });
+          let err;
+          try {
+            await queue.consume('a queue');
+          } catch(error) {
+            err = error;
+          }
+          expect(err).to.exist();
         });
       });
     });
