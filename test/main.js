@@ -34,7 +34,7 @@ describe('DBQueue', function() {
         });
       });
 
-      it('yields an error rather than throw an exception', async function() {
+      it('throws an error', async function() {
         let error;
 
         try {
@@ -97,7 +97,7 @@ describe('DBQueue', function() {
         });
       });
 
-      it('yields an error rather than throw an exception', async function() {
+      it('throws an error', async function() {
         queue = new DBQueue(config);
 
         let error;
@@ -294,7 +294,7 @@ describe('DBQueue', function() {
 
         context('that is greater than the number of messages', function() {
           beforeEach(async function() {
-            options.count = 3;
+            options.count = 100;
           });
 
           it('returns all available messages', async function() {
@@ -350,11 +350,12 @@ describe('DBQueue', function() {
       const clock = this.sinon.useFakeTimers();
 
       const stop = queue.listen('a queue', listen_options, consumer);
-      console.log('stop', stop);
+
       await clock.tickAsync(1500);
       expect(queue.consume).to.have.been.calledOnce();
       await clock.tickAsync(1000);
       expect(queue.consume).to.have.been.calledTwice();
+
       stop();
       await clock.tickAsync(2000);
       expect(queue.consume).to.have.been.calledTwice();
@@ -658,7 +659,7 @@ describe('DBQueue', function() {
       });
 
       context('when serialization fails', function() {
-        it('yields an error', async function() {
+        it('throws an error', async function() {
           const options = _.extend({}, helper.test_db_config, {
             serializer: function(data) {
               return data.someInvalidMethod();
@@ -678,7 +679,7 @@ describe('DBQueue', function() {
       });
 
       context('when deserialization fails', function() {
-        it('yields an error', async function() {
+        it('throws an error', async function() {
           const options = _.extend({}, helper.test_db_config, {
             serializer: function(data) {
               return data;
