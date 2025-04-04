@@ -13,8 +13,8 @@ function DBQueue(attrs) {
 
   delete attrs.table_name;
   const pool = mysql.createPoolPromise(attrs);
-  pool.on('connection', function(conn) {
-    conn.query('SET sql_mode="STRICT_ALL_TABLES"', [])
+  pool.on('connection', async function(conn) {
+    await conn.promise().query('SET sql_mode="STRICT_ALL_TABLES"');
   });
 
   this.db = pool;
@@ -29,10 +29,13 @@ DBQueue.connect = async function(options) {
 };
 
 DBQueue.prototype.query = async function(sql, bindings) {
-  const connection = await this.db.getConnection();
-  const [results] = await connection.query(sql, bindings);
+  try {
+    const connection = await this.db.getConnection();
+    const [results] = await connection.query(sql, bindings);
+  } finally {
+    connection.release();
+  }
 
-  connection.release();
   return results;
 };
 
@@ -44,7 +47,7 @@ DBQueue.prototype.insert = async function(queue_name, data) {
     VALUES (?, ?, 'unassigned', NOW(), NOW())
   `;
 
-  return this.query(sql, [this.table, queue_name, to_store]);
+  await this.query(sql, [this.table, queue_name, to_store]);
 };
 
 async function reserveJobs(queue, queue_input, options) {
