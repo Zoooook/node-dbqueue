@@ -29,9 +29,11 @@ DBQueue.connect = async function(options) {
 };
 
 DBQueue.prototype.query = async function(sql, bindings) {
+  const connection = await this.db.getConnection();
+  let results;
+
   try {
-    const connection = await this.db.getConnection();
-    const [results] = await connection.query(sql, bindings);
+    [results] = await connection.query(sql, bindings);
   } finally {
     connection.release();
   }
