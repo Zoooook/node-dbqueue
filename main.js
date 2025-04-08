@@ -12,11 +12,11 @@ function DBQueue(attrs) {
   this.persist_last_error = attrs.persist_last_error || false;
 
   delete attrs.table_name;
-  const pool = mysql.createPoolPromise(attrs);
-  pool.on('connection', async function(conn) {
-    await conn.promise().query('SET sql_mode="STRICT_ALL_TABLES"');
-  });
 
+  const pool = mysql.createPoolPromise(attrs);
+  pool.on('connection', function(conn) {
+    conn.query('SET sql_mode="STRICT_ALL_TABLES"');
+  });
   this.db = pool;
 }
 
