@@ -42,11 +42,8 @@ before(async function() {
   let table_schema;
 
   async function createTable(table_name) {
-    console.log('table_name', table_name);
-    console.log('table_schema', table_schema);
     const sql = table_schema.replace('CREATE TABLE jobs', 'CREATE TABLE ' + table_name);
 
-    console.log('sql', sql);
     return db.query(sql);
   }
 
